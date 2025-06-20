@@ -2,6 +2,22 @@
 
 A comprehensive tool to track and visualize developer productivity across GitHub organization repositories. Monitors commits, pull requests, code reviews, issues, and lines of code modified with beautiful heatmap visualizations.
 
+## 🏗️ Architecture
+
+The project uses a modular architecture for better maintainability:
+
+- **`libs/`** - Core library modules
+  - `github_api.py` - GitHub API client with rate limiting
+  - `productivity_tracker.py` - Core tracking functionality  
+  - `data_utils.py` - Data processing and file operations
+  - `visualizations.py` - Chart and heatmap generation
+  - `reports.py` - Report formatting and text summaries
+  - `comparison.py` - Multi-user comparison functionality
+
+- **Main Scripts:**
+  - `github_productivity_tracker.py` - Main tracking script
+  - `compare_users.py` - User comparison script
+
 ## ✨ Features
 
 - **📊 Multi-Metric Tracking**: Commits, PRs, code reviews, issues, lines modified
@@ -14,6 +30,7 @@ A comprehensive tool to track and visualize developer productivity across GitHub
 - **📈 Progress Tracking**: Verbose mode with detailed progress bars
 - **👤 Personal Repository Analysis**: Track activity on personal repos separately
 - **⚖️ Comparison Mode**: Compare productivity between personal and organization repos
+- **👥 Multi-User Comparisons**: Compare multiple users' productivity metrics
 - **📁 Organized Output**: User-specific folders with timestamped reports
 - **📄 Comprehensive Summaries**: Detailed text reports with insights
 
@@ -64,6 +81,9 @@ cp .repoignore.example .repoignore
 
 # Custom timeframe with verbose output
 ./github_productivity_tracker.py --all --timeframe 1month -v --heatmap
+
+# Compare multiple users
+./compare_users.py user1 user2 user3 --visualize
 ```
 
 ## 📋 Command Line Options
@@ -195,6 +215,20 @@ docs
 # Exclude infrastructure
 terraform-*
 k8s-*
+```
+
+### User Comparisons
+
+**Compare multiple users:**
+```bash
+# Basic comparison between users
+./compare_users.py user1 user2 user3
+
+# Comparison with visualizations
+./compare_users.py user1 user2 --visualize --verbose
+
+# Save comparison results
+./compare_users.py user1 user2 user3 --output comparison.json --report report.txt --visualize
 ```
 
 ### Performance Optimization
@@ -339,6 +373,20 @@ The tool automatically handles API rate limits with:
 ./github_productivity_tracker.py --username developer \
   --compare --timeframe 1month --all -v
 ```
+
+### Multi-User Team Analysis
+```bash
+# Compare team members
+./compare_users.py alice bob charlie --visualize
+
+# Generate team comparison report
+./compare_users.py alice bob charlie david \
+  --output team_analysis.json --report team_report.txt --visualize
+
+# Quick comparison for standup
+./compare_users.py alice bob --verbose
+```
+
 
 ## 🤝 Contributing
 

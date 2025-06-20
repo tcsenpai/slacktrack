@@ -5,3 +5,7 @@ outputs
 __pycache__
 *.pyc
 *.pyz
+latest_comparison.json
+comparison_results.json
+comparison_report.txt
+*.legacy.*
