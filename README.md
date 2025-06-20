@@ -12,7 +12,8 @@ A comprehensive tool to track and visualize developer productivity across GitHub
 - **📅 Flexible Timeframes**: Presets (1 week, 1 month, 3 days) or custom date ranges
 - **🔐 Private Repository Support**: Works with GitHub tokens for private org access
 - **📈 Progress Tracking**: Verbose mode with detailed progress bars
-- **👤 Personal Repository Analysis**: Track activity on personal repos separately (IN DEVELOPMENT)
+- **👤 Personal Repository Analysis**: Track activity on personal repos separately
+- **⚖️ Comparison Mode**: Compare productivity between personal and organization repos
 - **📁 Organized Output**: User-specific folders with timestamped reports
 - **📄 Comprehensive Summaries**: Detailed text reports with insights
 
@@ -69,7 +70,13 @@ cp .repoignore.example .repoignore
 
 ### Required Arguments
 - `--username` or set `GITHUB_USERNAME` in `.env`
-- `--organization` or set `GITHUB_ORGANIZATION` in `.env`
+- `--organization` or set `GITHUB_ORGANIZATION` in `.env` (not required for `--personal` mode)
+
+### Repository Scope Flags
+```bash
+--personal           # Track personal repositories only
+--compare            # Compare personal vs organization productivity
+```
 
 ### Metrics Flags
 ```bash
@@ -78,7 +85,6 @@ cp .repoignore.example .repoignore
 --include-issues      # Include issue creation metrics
 --include-lines       # Include lines of code modified
 --all                 # Enable all metrics above
---personal            # Also analyze personal repositories (IN DEVELOPMENT)
 ```
 
 ### Timeframe Options
@@ -145,15 +151,19 @@ Each analysis includes a detailed text summary with:
 
 ### Personal Repository Analysis
 ```bash
-# Note: Personal repository analysis is currently IN DEVELOPMENT
-# The --personal flag will be available in a future release
+# Track personal repositories only
+./github_productivity_tracker.py --username myuser --personal --all --heatmap
 
-# Analyze both organization and personal repositories (COMING SOON)
-./github_productivity_tracker.py --all --personal --heatmap
+# Compare personal vs organization productivity
+./github_productivity_tracker.py --username myuser --compare --all --heatmap
 
-# Focus on personal repos only with custom timeframe (COMING SOON)
-./github_productivity_tracker.py --personal --include-lines \
+# Focus on personal repos only with custom timeframe
+./github_productivity_tracker.py --username myuser --personal --include-lines \
   --timeframe custom --start-date 2024-01-01 --end-date 2024-01-31
+
+# Personal repos with detailed analysis
+./github_productivity_tracker.py --username myuser --personal \
+  --all --heatmap --timeline -v
 ```
 
 ### Custom Timeframes
@@ -247,16 +257,25 @@ Create a Personal Access Token with these scopes:
 - **Unauthenticated**: 60 requests/hour
 - **Search API**: 30 requests/minute
 
+### Rate Limiting Handling
+The tool automatically handles API rate limits with:
+- **Smart Rate Limit Detection**: Monitors remaining requests
+- **Automatic Retry Logic**: Waits when limits are reached
+- **Exponential Backoff**: For server errors and failures
+- **Search API Throttling**: Special handling for search endpoints
+
 ### Optimization Features
 - Parallel processing (3 workers for branches, 5 for stats)
 - Request deduplication
 - Efficient pagination
 - Smart caching
+- Automatic rate limit compliance
 
 ### Performance Tips
 - Use `.repoignore` to exclude unnecessary repositories
 - Avoid `--include-lines` for quick analysis
 - Use shorter timeframes for faster results
+- Tool will automatically wait for rate limits to reset
 
 ## 🐛 Troubleshooting
 
@@ -268,6 +287,7 @@ Create a Personal Access Token with these scopes:
 - Ensure token has repository access
 
 **Rate limit exceeded**:
+- Tool automatically handles rate limits (waits and retries)
 - Verify GitHub token is set correctly
 - Reduce scope with `.repoignore`
 - Use shorter timeframes
@@ -307,6 +327,17 @@ Create a Personal Access Token with these scopes:
 ./github_productivity_tracker.py --timeframe custom \
   --start-date 2024-01-15 --end-date 2024-01-29 \
   --all --heatmap
+```
+
+### Personal vs Organization Comparison
+```bash
+# Compare productivity across personal and work repositories
+./github_productivity_tracker.py --username developer \
+  --compare --all --heatmap --timeline
+
+# Monthly comparison with detailed metrics
+./github_productivity_tracker.py --username developer \
+  --compare --timeframe 1month --all -v
 ```
 
 ## 🤝 Contributing

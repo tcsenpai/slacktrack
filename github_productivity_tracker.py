@@ -23,6 +23,7 @@ import threading
 from tqdm import tqdm
 import fnmatch
 import re
+import time
 
 
 class GitHubProductivityTracker:
@@ -41,12 +42,79 @@ class GitHubProductivityTracker:
             'Authorization': f'token {self.github_token}' if self.github_token else '',
             'Accept': 'application/vnd.github.v3+json'
         }
+        
+        # Rate limiting tracking
+        self.rate_limit_remaining = 5000
+        self.rate_limit_reset = 0
+        self.search_rate_limit_remaining = 30
+        self.search_rate_limit_reset = 0
     
     def _verbose_print(self, message: str):
         """Thread-safe verbose printing."""
         if self.verbose:
             with self._lock:
                 print(f"[VERBOSE] {message}")
+    
+    def _make_request_with_retry(self, url: str, params: Optional[Dict] = None, is_search: bool = False, max_retries: int = 3) -> requests.Response:
+        """Make API request with rate limiting and retry logic."""
+        for attempt in range(max_retries):
+            try:
+                # Check rate limits before making request
+                if is_search:
+                    if self.search_rate_limit_remaining <= 1:
+                        if self.search_rate_limit_reset > time.time():
+                            wait_time = self.search_rate_limit_reset - time.time() + 1
+                            self._verbose_print(f"Search API rate limit reached. Waiting {wait_time:.0f} seconds...")
+                            time.sleep(wait_time)
+                else:
+                    if self.rate_limit_remaining <= 1:
+                        if self.rate_limit_reset > time.time():
+                            wait_time = self.rate_limit_reset - time.time() + 1
+                            self._verbose_print(f"API rate limit reached. Waiting {wait_time:.0f} seconds...")
+                            time.sleep(wait_time)
+                
+                response = self._make_request_with_retry(url, params)
+                
+                # Update rate limit tracking from response headers
+                if 'X-RateLimit-Remaining' in response.headers:
+                    if is_search:
+                        self.search_rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 30))
+                        self.search_rate_limit_reset = int(response.headers.get('X-RateLimit-Reset', time.time() + 60))
+                    else:
+                        self.rate_limit_remaining = int(response.headers.get('X-RateLimit-Remaining', 5000))
+                        self.rate_limit_reset = int(response.headers.get('X-RateLimit-Reset', time.time() + 3600))
+                
+                # Handle rate limit exceeded (429)
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    if attempt < max_retries - 1:
+                        self._verbose_print(f"Rate limit exceeded (429). Retrying after {retry_after} seconds... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        print(f"Rate limit exceeded and max retries reached. Response: {response.status_code}")
+                        return response
+                
+                # Handle other server errors with exponential backoff
+                if response.status_code >= 500 and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1  # exponential backoff: 1, 2, 4 seconds
+                    self._verbose_print(f"Server error {response.status_code}. Retrying in {wait_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                
+                return response
+                
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1
+                    self._verbose_print(f"Request exception: {e}. Retrying in {wait_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"Request failed after {max_retries} attempts: {e}")
+                    raise
+        
+        return response
     
     def load_repoignore(self, repoignore_path: str = '.repoignore') -> List[str]:
         """Load repository ignore patterns from .repoignore file."""
@@ -121,7 +189,7 @@ class GitHubProductivityTracker:
                 'type': 'all'  # Include both public and private repos
             }
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = self._make_request_with_retry(url, params)
             
             if response.status_code != 200:
                 print(f"Error fetching repositories: {response.status_code}")
@@ -178,7 +246,7 @@ class GitHubProductivityTracker:
             url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/branches"
             params = {'page': page, 'per_page': 100}
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = self._make_request_with_retry(url, params)
             
             if response.status_code != 200:
                 print(f"Error fetching branches for {repo_name}: {response.status_code}")
@@ -211,7 +279,7 @@ class GitHubProductivityTracker:
                 'per_page': 100
             }
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = self._make_request_with_retry(url, params)
             
             if response.status_code != 200:
                 if response.status_code == 409:
@@ -239,7 +307,7 @@ class GitHubProductivityTracker:
         def get_single_commit_stats(commit):
             sha = commit['sha']
             stats_url = f"{self.base_url}/repos/{self.org_name}/{repo_name}/commits/{sha}"
-            response = requests.get(stats_url, headers=self.headers)
+            response = self._make_request_with_retry(stats_url)
             
             if response.status_code == 200:
                 detailed = response.json()
@@ -333,7 +401,7 @@ class GitHubProductivityTracker:
                 'per_page': 100
             }
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = self._make_request_with_retry(url, params, is_search=True)
             
             if response.status_code != 200:
                 print(f"Error fetching pull requests: {response.status_code}")
@@ -365,7 +433,7 @@ class GitHubProductivityTracker:
                 'per_page': 100
             }
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = self._make_request_with_retry(url, params, is_search=True)
             
             if response.status_code != 200:
                 print(f"Error fetching code reviews: {response.status_code}")
@@ -397,7 +465,7 @@ class GitHubProductivityTracker:
                 'per_page': 100
             }
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = self._make_request_with_retry(url, params, is_search=True)
             
             if response.status_code != 200:
                 print(f"Error fetching issues: {response.status_code}")
@@ -552,7 +620,7 @@ class GitHubProductivityTracker:
                 "sort": "updated"
             }
 
-            response = requests.get(url, headers=self.headers, params=params)
+            response = self._make_request_with_retry(url, params)
 
             if response.status_code != 200:
                 print(f"Error fetching personal repositories for {username}: {response.status_code}")
@@ -679,6 +747,190 @@ class GitHubProductivityTracker:
             }
 
         return result
+
+    def compare_personal_vs_organization(self, username: str, timeframe: str,
+                                       custom_start: str = None, custom_end: str = None,
+                                       include_prs: bool = False, include_reviews: bool = False,
+                                       include_issues: bool = False, include_lines: bool = False,
+                                       repoignore_path: str = ".repoignore") -> Dict:
+        """Compare productivity between personal and organization repositories."""
+        print(f"Comparing personal vs organization productivity for {username}...")
+        
+        # Track organization productivity
+        org_data = self.track_user_productivity(
+            username, timeframe, custom_start, custom_end,
+            include_prs, include_reviews, include_issues, include_lines, repoignore_path
+        )
+        
+        # Track personal productivity
+        personal_data = self.track_user_personal_productivity(
+            username, timeframe, custom_start, custom_end,
+            include_prs, include_reviews, include_issues, include_lines, repoignore_path
+        )
+        
+        # Create comparison data structure
+        comparison = {
+            'username': username,
+            'timeframe': org_data.get('timeframe', {}),
+            'organization': {
+                'name': self.org_name,
+                'data': org_data
+            },
+            'personal': {
+                'data': personal_data
+            },
+            'comparison': {
+                'total_commits': {
+                    'organization': org_data.get('total_commits', 0),
+                    'personal': personal_data.get('total_commits', 0),
+                    'difference': personal_data.get('total_commits', 0) - org_data.get('total_commits', 0)
+                },
+                'active_repositories': {
+                    'organization': len(org_data.get('repositories', {})),
+                    'personal': len(personal_data.get('repositories', {})),
+                    'difference': len(personal_data.get('repositories', {})) - len(org_data.get('repositories', {}))
+                }
+            }
+        }
+        
+        # Add line stats comparison if available
+        if include_lines:
+            org_lines = org_data.get('line_stats', {})
+            personal_lines = personal_data.get('line_stats', {})
+            
+            comparison['comparison']['line_stats'] = {
+                'organization': org_lines,
+                'personal': personal_lines,
+                'difference': {
+                    'total_additions': personal_lines.get('total_additions', 0) - org_lines.get('total_additions', 0),
+                    'total_deletions': personal_lines.get('total_deletions', 0) - org_lines.get('total_deletions', 0),
+                    'total_changes': personal_lines.get('total_changes', 0) - org_lines.get('total_changes', 0)
+                }
+            }
+        
+        # Add PR/review/issue comparisons if available
+        if include_prs:
+            org_prs = org_data.get('pull_requests', {}).get('total', 0)
+            personal_prs = personal_data.get('pull_requests', {}).get('total', 0)
+            comparison['comparison']['pull_requests'] = {
+                'organization': org_prs,
+                'personal': personal_prs,
+                'difference': personal_prs - org_prs
+            }
+        
+        if include_reviews:
+            org_reviews = org_data.get('code_reviews', {}).get('total', 0)
+            personal_reviews = personal_data.get('code_reviews', {}).get('total', 0)
+            comparison['comparison']['code_reviews'] = {
+                'organization': org_reviews,
+                'personal': personal_reviews,
+                'difference': personal_reviews - org_reviews
+            }
+        
+        if include_issues:
+            org_issues = org_data.get('issues', {}).get('total', 0)
+            personal_issues = personal_data.get('issues', {}).get('total', 0)
+            comparison['comparison']['issues'] = {
+                'organization': org_issues,
+                'personal': personal_issues,
+                'difference': personal_issues - org_issues
+            }
+        
+        return comparison
+
+    def display_comparison_report(self, comparison_data: Dict):
+        """Display a formatted comparison report between personal and organization productivity."""
+        if not comparison_data:
+            print("No comparison data to display.")
+            return
+        
+        print("\n" + "="*80)
+        print("PERSONAL VS ORGANIZATION PRODUCTIVITY COMPARISON")
+        print("="*80)
+        
+        # Format timeframe for human readability
+        timeframe = comparison_data.get('timeframe', {})
+        if timeframe.get('since') and timeframe.get('until'):
+            since_date = datetime.fromisoformat(timeframe['since'].replace('Z', '+00:00'))
+            until_date = datetime.fromisoformat(timeframe['until'].replace('Z', '+00:00'))
+            
+            print(f"User: {comparison_data['username']}")
+            print(f"Organization: {comparison_data['organization']['name']}")
+            print(f"Timeframe: {since_date.strftime('%B %d, %Y')} to {until_date.strftime('%B %d, %Y')}")
+            print()
+        
+        # Display comparison metrics
+        comp = comparison_data['comparison']
+        
+        print("COMMITS COMPARISON:")
+        print(f"  Organization: {comp['total_commits']['organization']}")
+        print(f"  Personal:     {comp['total_commits']['personal']}")
+        print(f"  Difference:   {comp['total_commits']['difference']:+d}")
+        print()
+        
+        print("ACTIVE REPOSITORIES:")
+        print(f"  Organization: {comp['active_repositories']['organization']}")
+        print(f"  Personal:     {comp['active_repositories']['personal']}")
+        print(f"  Difference:   {comp['active_repositories']['difference']:+d}")
+        print()
+        
+        # Display line stats if available
+        if 'line_stats' in comp:
+            line_stats = comp['line_stats']
+            print("LINES OF CODE COMPARISON:")
+            print(f"  Lines Added:")
+            print(f"    Organization: +{line_stats['organization'].get('total_additions', 0):,}")
+            print(f"    Personal:     +{line_stats['personal'].get('total_additions', 0):,}")
+            print(f"    Difference:   {line_stats['difference']['total_additions']:+,}")
+            print(f"  Lines Deleted:")
+            print(f"    Organization: -{line_stats['organization'].get('total_deletions', 0):,}")
+            print(f"    Personal:     -{line_stats['personal'].get('total_deletions', 0):,}")
+            print(f"    Difference:   {line_stats['difference']['total_deletions']:+,}")
+            print(f"  Total Changes:")
+            print(f"    Organization: {line_stats['organization'].get('total_changes', 0):,}")
+            print(f"    Personal:     {line_stats['personal'].get('total_changes', 0):,}")
+            print(f"    Difference:   {line_stats['difference']['total_changes']:+,}")
+            print()
+        
+        # Display additional metrics if available
+        if 'pull_requests' in comp:
+            pr_comp = comp['pull_requests']
+            print("PULL REQUESTS:")
+            print(f"  Organization: {pr_comp['organization']}")
+            print(f"  Personal:     {pr_comp['personal']}")
+            print(f"  Difference:   {pr_comp['difference']:+d}")
+            print()
+        
+        if 'code_reviews' in comp:
+            review_comp = comp['code_reviews']
+            print("CODE REVIEWS:")
+            print(f"  Organization: {review_comp['organization']}")
+            print(f"  Personal:     {review_comp['personal']}")
+            print(f"  Difference:   {review_comp['difference']:+d}")
+            print()
+        
+        if 'issues' in comp:
+            issue_comp = comp['issues']
+            print("ISSUES CREATED:")
+            print(f"  Organization: {issue_comp['organization']}")
+            print(f"  Personal:     {issue_comp['personal']}")
+            print(f"  Difference:   {issue_comp['difference']:+d}")
+            print()
+        
+        # Summary
+        total_org_activity = comp['total_commits']['organization']
+        total_personal_activity = comp['total_commits']['personal']
+        total_activity = total_org_activity + total_personal_activity
+        
+        if total_activity > 0:
+            org_percentage = (total_org_activity / total_activity) * 100
+            personal_percentage = (total_personal_activity / total_activity) * 100
+            
+            print("ACTIVITY DISTRIBUTION:")
+            print(f"  Organization: {org_percentage:.1f}% ({total_org_activity}/{total_activity})")
+            print(f"  Personal:     {personal_percentage:.1f}% ({total_personal_activity}/{total_activity})")
+        
+        print("\n" + "="*80)
 
 
     def display_productivity_report(self, data: Dict):
@@ -1026,27 +1278,34 @@ class GitHubProductivityTracker:
     
     def create_heatmap(self, data: Dict, output_path: str = None):
         """Create a heatmap visualization - delegates to comprehensive version if multiple metrics available."""
+        # Handle comparison data structure
+        if 'comparison' in data:
+            print("Comparison data detected - using organization data for visualization...")
+            viz_data = data['organization']['data']
+        else:
+            viz_data = data
+        
         # Check if we have additional metrics beyond commits
         has_additional_metrics = any([
-            data.get('pull_requests', {}).get('total', 0) > 0,
-            data.get('code_reviews', {}).get('total', 0) > 0,
-            data.get('issues', {}).get('total', 0) > 0,
-            data.get('line_stats', {}).get('total_changes', 0) > 0
+            viz_data.get('pull_requests', {}).get('total', 0) > 0,
+            viz_data.get('code_reviews', {}).get('total', 0) > 0,
+            viz_data.get('issues', {}).get('total', 0) > 0,
+            viz_data.get('line_stats', {}).get('total_changes', 0) > 0
         ])
         
         if has_additional_metrics:
             print("Multiple metrics detected - creating comprehensive dashboard...")
-            self.create_comprehensive_heatmap(data, output_path)
+            self.create_comprehensive_heatmap(viz_data, output_path)
             return
         
         # Original simple heatmap for commits only
-        if not data or not data['repositories']:
+        if not viz_data or not viz_data.get('repositories'):
             print("No data available for heatmap generation.")
             return
         
         # Collect all commits with dates
         all_commits = []
-        for repo_data in data['repositories'].values():
+        for repo_data in viz_data['repositories'].values():
             for commit in repo_data['commits']:
                 commit_date = datetime.fromisoformat(commit['commit']['author']['date'].replace('Z', '+00:00'))
                 all_commits.append(commit_date.date())
@@ -1083,7 +1342,7 @@ class GitHubProductivityTracker:
         
         # Daily activity heatmap (GitHub-style)
         im1 = ax1.imshow(activity_matrix, cmap='Greens', aspect='auto')
-        ax1.set_title(f"Commit Activity Heatmap for {data['username']}", 
+        ax1.set_title(f"Commit Activity Heatmap for {viz_data['username']}", 
                      fontsize=14, fontweight='bold')
         ax1.set_ylabel('Day of Week')
         ax1.set_xlabel('Week')
@@ -1095,8 +1354,8 @@ class GitHubProductivityTracker:
         cbar1.set_label('Commits per Day')
         
         # Repository distribution pie chart
-        repo_names = list(data['repositories'].keys())
-        commit_counts_by_repo = [data['repositories'][repo]['commit_count'] for repo in repo_names]
+        repo_names = list(viz_data['repositories'].keys())
+        commit_counts_by_repo = [viz_data['repositories'][repo]['commit_count'] for repo in repo_names]
         
         # Only show top 10 repos, group others as 'Others'
         if len(repo_names) > 10:
@@ -1108,25 +1367,25 @@ class GitHubProductivityTracker:
             commit_counts_by_repo = [count for _, count in top_repos] + [others_count]
         
         ax2.pie(commit_counts_by_repo, labels=repo_names, autopct='%1.1f%%', startangle=90)
-        ax2.set_title(f"Commit Distribution by Repository\nTotal: {data['total_commits']} commits", 
+        ax2.set_title(f"Commit Distribution by Repository\nTotal: {viz_data['total_commits']} commits", 
                      fontsize=12, fontweight='bold')
         
         plt.tight_layout()
         
         # Create output directory and save files
-        output_dir = self.create_output_directory(data['username'])
+        output_dir = self.create_output_directory(viz_data['username'])
         timestamp = datetime.now().strftime('%Y-%m-%d')
         
         if output_path:
             final_path = output_path
         else:
-            final_path = os.path.join(output_dir, f"productivity_heatmap_{data['username']}_{timestamp}.png")
+            final_path = os.path.join(output_dir, f"productivity_heatmap_{viz_data['username']}_{timestamp}.png")
         
         plt.savefig(final_path, dpi=300, bbox_inches='tight')
         print(f"Heatmap saved to {final_path}")
         
         # Generate text summary
-        self.generate_text_summary(data, output_dir)
+        self.generate_text_summary(viz_data, output_dir)
         
         try:
             plt.show()
@@ -1215,6 +1474,8 @@ def main():
     parser.add_argument('--all', action='store_true', help='Include all available productivity indicators')
     parser.add_argument('-v', '--verbose', action='store_true', help='Show detailed progress and branch-by-branch information')
     parser.add_argument('--repoignore', default='.repoignore', help='Path to repository ignore file (default: .repoignore)')
+    parser.add_argument('--personal', action='store_true', help='Track personal repositories instead of organization repositories')
+    parser.add_argument('--compare', action='store_true', help='Compare personal and organization productivity (requires both --organization and --personal flags)')
     
     args = parser.parse_args()
     
@@ -1235,8 +1496,14 @@ def main():
         print("Error: GitHub username is required. Set GITHUB_USERNAME in .env or use --username")
         sys.exit(1)
     
-    if not organization:
+    # Organization is only required for non-personal tracking
+    if not args.personal and not organization:
         print("Error: GitHub organization is required. Set GITHUB_ORGANIZATION in .env or use --organization")
+        sys.exit(1)
+    
+    # For comparison mode, both organization and personal flags are needed
+    if args.compare and not organization:
+        print("Error: --compare requires organization to be specified")
         sys.exit(1)
     
     # Validate custom timeframe arguments
@@ -1246,23 +1513,108 @@ def main():
             sys.exit(1)
     
     # Initialize tracker
-    tracker = GitHubProductivityTracker(organization, token, args.verbose)
+    tracker = GitHubProductivityTracker(organization or username, token, args.verbose)
     
-    # Track productivity
-    data = tracker.track_user_productivity(
-        username, 
-        args.timeframe,
-        args.start_date,
-        args.end_date,
-        args.include_prs,
-        args.include_reviews,
-        args.include_issues,
-        args.include_lines,
-        args.repoignore
-    )
+    # Handle different tracking modes
+    if args.compare:
+        # Compare personal vs organization productivity
+        comparison_data = tracker.compare_personal_vs_organization(
+            username,
+            args.timeframe,
+            args.start_date,
+            args.end_date,
+            args.include_prs,
+            args.include_reviews,
+            args.include_issues,
+            args.include_lines,
+            args.repoignore
+        )
+        
+        # Display comparison report
+        tracker.display_comparison_report(comparison_data)
+        data = comparison_data  # For file output
+        
+    elif args.personal:
+        # Track personal productivity only
+        data = tracker.track_user_personal_productivity(
+            username,
+            args.timeframe,
+            args.start_date,
+            args.end_date,
+            args.include_prs,
+            args.include_reviews,
+            args.include_issues,
+            args.include_lines,
+            args.repoignore
+        )
+        
+        # Display report (modify display for personal)
+        if data:
+            print("\n" + "="*80)
+            print(f"PERSONAL PRODUCTIVITY REPORT")
+            print("="*80)
+            # Format timeframe for human readability
+            since_date = datetime.fromisoformat(data['timeframe']['since'].replace('Z', '+00:00'))
+            until_date = datetime.fromisoformat(data['timeframe']['until'].replace('Z', '+00:00'))
+            
+            print(f"User: {data['username']}")
+            print(f"Scope: Personal Repositories")
+            print(f"Timeframe: {since_date.strftime('%B %d, %Y')} to {until_date.strftime('%B %d, %Y')}")
+            print(f"Total Commits: {data['total_commits']}")
+            print(f"Repositories with activity: {len(data['repositories'])}")
+            
+            # Display additional metrics if available
+            if 'line_stats' in data:
+                stats = data['line_stats']
+                print(f"Lines Modified: +{stats['total_additions']}/-{stats['total_deletions']} ({stats['total_changes']} total)")
+            
+            if data['repositories']:
+                print("\nPER REPOSITORY BREAKDOWN:")
+                print("-" * 80)
+                
+                # Sort repositories by commit count (descending)
+                sorted_repos = sorted(data['repositories'].items(), 
+                                    key=lambda x: x[1]['commit_count'], reverse=True)
+                
+                for repo_name, repo_data in sorted_repos:
+                    fork_indicator = " (fork)" if repo_data.get('is_fork', False) else ""
+                    private_indicator = " (private)" if repo_data.get('is_private', False) else ""
+                    print(f"\n{repo_name}: {repo_data['commit_count']} commits{fork_indicator}{private_indicator}")
+                    print(f"  Repository: {repo_data['repo_url']}")
+                    
+                    # Show recent commits (limit to 5)
+                    recent_commits = repo_data['commits'][:5]
+                    for commit in recent_commits:
+                        date = commit['commit']['author']['date']
+                        message = commit['commit']['message'].split('\n')[0][:60]
+                        print(f"    {date[:10]} - {message}")
+                    
+                    if len(repo_data['commits']) > 5:
+                        print(f"    ... and {len(repo_data['commits']) - 5} more commits")
+            
+            print("\n" + "="*80)
     
-    # Display report
-    tracker.display_productivity_report(data)
+    else:
+        # Track organization productivity (default behavior)
+        data = tracker.track_user_productivity(
+            username, 
+            args.timeframe,
+            args.start_date,
+            args.end_date,
+            args.include_prs,
+            args.include_reviews,
+            args.include_issues,
+            args.include_lines,
+            args.repoignore
+        )
+        
+        # Display report
+        tracker.display_productivity_report(data)
+    
+    # Adjust file naming for different modes
+    if not data:
+        print("No data to save.")
+        return
     
     # Save to file if requested
     if args.output:
