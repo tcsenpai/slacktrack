@@ -39,15 +39,14 @@ The project uses a modular architecture for better maintainability:
 ### Installation
 
 ```bash
-# Clone or download the script
-git clone <your-repo-url>
-cd github-productivity-tracker
+git clone https://github.com/tcsenpai/slacktrack
+cd slacktrack
 
 # Install dependencies
 pip install -r requirements.txt
 
 # Make script executable
-chmod +x github_productivity_tracker.py
+chmod +x *.py
 ```
 
 ### Configuration
