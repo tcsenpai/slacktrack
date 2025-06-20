@@ -1,0 +1,7 @@
+outputs
+*.backup
+.venv
+.env
+__pycache__
+*.pyc
+*.pyz

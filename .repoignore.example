@@ -1,0 +1,72 @@
+# .repoignore - Repository Exclusion Configuration
+# 
+# This file allows you to exclude specific repositories from productivity tracking.
+# Supports exact names, wildcards (*), and basic patterns.
+# 
+# Syntax:
+#   - One repository pattern per line
+#   - Lines starting with # are comments
+#   - Empty lines are ignored
+#   - Case-sensitive matching
+#   - Wildcards supported: * (matches any characters)
+#
+# Examples:
+
+# Exclude specific repositories by exact name
+legacy-project
+old-website
+deprecated-api
+
+# Exclude all test repositories
+*-test
+test-*
+*test*
+
+# Exclude documentation repositories
+docs
+documentation
+*-docs
+*-documentation
+
+# Exclude temporary/experimental repositories
+temp-*
+experimental-*
+prototype-*
+poc-*
+
+# Exclude archived projects
+archived-*
+*-archived
+
+# Exclude infrastructure/config repositories
+terraform-*
+k8s-*
+kubernetes-*
+docker-*
+ansible-*
+.github
+
+# Exclude forks (if following naming convention)
+fork-*
+*-fork
+
+# Exclude vendor/third-party code
+vendor-*
+third-party-*
+external-*
+
+# Exclude personal/learning repositories
+personal-*
+learning-*
+tutorial-*
+playground-*
+
+# Exclude specific language/framework boilerplates
+*-boilerplate
+*-template
+*-starter
+
+# Exclude backup repositories
+backup-*
+*-backup
+*-bak
